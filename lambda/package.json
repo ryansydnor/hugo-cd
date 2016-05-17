@@ -1,0 +1,12 @@
+{
+	"name": "hugo-cd",
+	"version": "0.0.1",
+	"author": "Ryan Sydnor <ryan.t.sydnor@gmail.com>",
+	"description": "lambda function to deploy your hugo website",
+	"repository": "https://github.com/ryansydnor/hugo-cd",
+	"license": "MIT",
+	"dependencies": {
+		"request": "*",
+		"s3": "*"
+	}
+}

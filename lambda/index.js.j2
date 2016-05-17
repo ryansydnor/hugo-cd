@@ -1,0 +1,110 @@
+var spawn = require('child_process').spawn
+var request = require('request');
+var fs = require('fs');
+var s3 = require('s3');
+
+var global_callback = null;
+
+var outputDir = '/tmp/'
+var siteFolder = outputDir + '{{ path_to_site }}';
+var siteOutput = siteFolder + '/public';
+var sourceUrl = '{{ git_url }}/archive/master.zip';
+
+
+function downloadSource() {
+	console.log('downloading source from ' + sourceUrl);
+	zipPath = outputDir + 'site.zip';
+	request(sourceUrl)
+	.pipe(fs.createWriteStream(zipPath))
+	.on('close', function() {
+		console.log('source saved to ' + zipPath);
+		extractSource(zipPath)
+	});
+}
+
+function extractSource(zipPath) {
+	console.log('extracting site')
+	var child = spawn('unzip', ['-o', zipPath, '-d', outputDir]); 
+    stderr = ''
+    child.stdout.on('data', function (data) {
+        console.log('unzip-stdout: ' + data);
+    });
+    child.stderr.on('data', function (data) {
+    	stderr = data;
+        console.log('unzip-stderr: ' + data);
+    });
+    child.on('error', function(err) {
+        console.log("unzip failed with error: " + err);
+    });
+    child.on('close', function(code) {
+        console.log("unzip exited with code: " + code);
+        if(!code) {
+        	generateSite();
+        } else {
+	       	global_callback(stderr, {
+		  		"message": "unzip failed"
+		  	});
+        }
+    });
+}
+
+function generateSite() {
+	console.log('generating site from ' + siteFolder);
+	var child = spawn('./hugo', ['--source', siteFolder]); 
+    stderr = ''
+    child.stdout.on('data', function (data) {
+        console.log('hugo-stdout: ' + data);
+    });
+    child.stderr.on('data', function (data) {
+    	stderr = data;
+        console.log('hugo-stderr: ' + data);
+    });
+    child.on('error', function(err) {
+        console.log("hugo failed with error: " + err);
+    });
+    child.on('close', function(code) {
+        console.log("hugo exited with code: " + code);
+        if(!code) {
+        	uploadSite();
+        } else {
+	        global_callback(stderr, {
+		  		"message": "hugo failed"
+		  	});  	
+        }
+    });
+}
+
+function uploadSite() {
+	console.log('uploading site from ' + siteOutput);
+	var uploader = s3.createClient().uploadDir({
+		localDir: siteOutput,
+		deleteRemoved: true,
+		s3Params: {
+			Bucket: '{{ stack_name }}'
+		}
+	});
+	uploader.on('error', function(err) {
+	  console.error("unable to sync to s3:" + err.stack);
+	  console.error(err);
+	  global_callback(err, {
+	  	"message": "unable to sync to s3"
+	  });
+	});
+	uploader.on('progress', function() {
+	  console.log("upload progress: " + uploader.progressAmount + "/" + uploader.progressTotal);
+	});
+	uploader.on('end', function() {
+	  console.log("done uploading");
+	  global_callback(null, {
+	  	'message': 'upload success',
+	  	'filesCreated': uploader.progressAmount + "/" + uploader.progressTotal,
+	  	'filesDeleted': uploader.deleteAmount + "/" + uploader.deleteTotal
+	  })
+	});
+}
+
+exports.handler = function(event, context, callback) {
+	global_callback = callback;
+	console.log('Received event:', JSON.stringify(event, null, 2));
+	downloadSource();
+};

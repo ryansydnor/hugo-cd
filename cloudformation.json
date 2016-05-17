@@ -1,0 +1,287 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "This creates an Amazon Route 53 DNS record, an S3 bucket and a CloudFront distribution.",
+
+  "Parameters" : {
+    "HostedZone" : {
+      "Type" : "String",
+      "Description" : "Name of your route 53 hosted zone.",
+      "AllowedPattern" : "(?!-)[a-zA-Z0-9-.]{1,63}(?<!-)",
+      "ConstraintDescription" : "must be a valid DNS zone name."
+    },
+    "WebsiteS3Bucket": {
+      "Type": "String",
+      "Description": "Name of the bucket your static files will live in"
+    },
+    "LambdaS3Bucket": {
+      "Type": "String",
+      "Description": "Name of the bucket your lambda function zipfile is in"
+    },
+    "LambdaS3Key": {
+      "Type": "String",
+      "Description": "Name of your lambda function zipfile"
+    },
+    "IAMCertificateId": {
+      "Type": "String",
+      "Description": "ServerCertificateId of certificate you want to use on cloudfront",
+      "Default": ""
+    },
+    "SubDomain": {
+      "Type": "String",
+      "Description": "ServerCertificateId of certificate you want to use on cloudfront",
+      "Default": ""
+    }
+  },
+
+  "Conditions": {
+    "UseDefaultCert": {"Fn::Equals": [{"Ref": "IAMCertificateId"}, ""]},
+    "UseHostedZone": {"Fn::Equals": [{"Ref": "SubDomain"}, ""]}
+  },
+
+  "Mappings" : {
+    "Region2S3WebsiteSuffix": {
+      "us-east-1"      : { "Suffix": ".s3-website-us-east-1.amazonaws.com" },
+      "us-west-1"      : { "Suffix": ".s3-website-us-west-1.amazonaws.com" },
+      "us-west-2"      : { "Suffix": ".s3-website-us-west-2.amazonaws.com" },
+      "eu-west-1"      : { "Suffix": ".s3-website-eu-west-1.amazonaws.com" },
+      "ap-northeast-1" : { "Suffix": ".s3-website-ap-northeast-1.amazonaws.com" },
+      "ap-northeast-2" : { "Suffix": ".s3-website-ap-northeast-2.amazonaws.com" },
+      "ap-southeast-1" : { "Suffix": ".s3-website-ap-southeast-1.amazonaws.com" },
+      "ap-southeast-2" : { "Suffix": ".s3-website-ap-southeast-2.amazonaws.com" },
+      "sa-east-1"      : { "Suffix": ".s3-website-sa-east-1.amazonaws.com" },
+      "cn-north-1"     : { "Suffix": ".s3-website.cn-north-1.amazonaws.com.cn" },
+      "eu-central-1"   : { "Suffix": ".s3-website-eu-central-1.amazonaws.com" }
+    }
+  },
+
+  "Resources" : {
+    "S3BucketForWebsiteContent" : {
+      "Type" : "AWS::S3::Bucket",
+      "Properties" : {
+        "BucketName": { "Ref" : "WebsiteS3Bucket" },
+        "AccessControl" : "PublicRead",
+        "WebsiteConfiguration": {
+          "ErrorDocument": "404.html",
+          "IndexDocument": "index.html"
+        }
+      }
+    },
+
+    "S3BucketPolicyPublicRead" : {
+      "Type" : "AWS::S3::BucketPolicy",
+      "Properties" : {
+        "Bucket" : {"Ref" : "S3BucketForWebsiteContent"},
+        "PolicyDocument": {
+          "Statement":[{
+          "Action":["s3:GetObject"],
+          "Effect":"Allow",
+          "Resource": { "Fn::Join" : ["", ["arn:aws:s3:::", { "Ref" : "S3BucketForWebsiteContent" } , "/*" ]]},
+          "Principal":"*"
+          }]
+        }
+      }
+    },
+
+    "WebsiteCDN" : {
+      "Type" : "AWS::CloudFront::Distribution",
+      "Properties" : {
+        "DistributionConfig" : {
+          "Enabled" : "true",
+          "Aliases": [
+            {"Fn::If" : [
+              "UseHostedZone",
+              {"Ref": "HostedZone"},
+              { "Fn::Join" : [ "", [{"Ref" : "SubDomain"}, ".", { "Ref" : "HostedZone" }]]}
+            ]}
+          ],
+          "DefaultCacheBehavior" : {
+            "Compress": true,
+             "ForwardedValues" : { "QueryString" : "true" },
+             "TargetOriginId" : "only-origin",
+             "ViewerProtocolPolicy" : "redirect-to-https"
+          },
+          "PriceClass": "PriceClass_100",
+          "DefaultRootObject" : "index.html",
+          "Origins" : [
+                       {
+                          "CustomOriginConfig": {
+                            "OriginProtocolPolicy": "http-only"
+                          },
+                          "DomainName" : { "Fn::Join" : ["", [
+                            {"Ref" : "S3BucketForWebsiteContent"},
+                            {"Fn::FindInMap" : [ "Region2S3WebsiteSuffix", { "Ref" : "AWS::Region" }, "Suffix"]}
+                          ]]},
+                          "Id" : "only-origin"
+                        }
+                      ],
+          "ViewerCertificate":  {"Fn::If" : [
+            "UseDefaultCert", 
+            {
+              "CloudFrontDefaultCertificate": true
+            },
+            {
+              "IamCertificateId": {"Ref": "IAMCertificateId"},
+              "SslSupportMethod": "sni-only"
+            } 
+          ]}
+        }
+      }
+    },
+
+    "WebsiteDNSName" : {
+      "Type" : "AWS::Route53::RecordSet",
+      "DependsOn": "WebsiteCDN",
+      "Properties" : {
+        "HostedZoneName" : { "Fn::Join" : [ "", [{ "Ref" : "HostedZone" }, "."]]},
+        "Comment" : "DNS redirect CloudFront distribution",
+        "Name" :  {"Fn::If" : [
+                    "UseHostedZone",
+                    {"Ref": "HostedZone"},
+                    { "Fn::Join" : [ "", [{"Ref" : "SubDomain"}, ".", { "Ref" : "HostedZone" }]]}
+                    ]},
+        "Type" : "A",
+        "AliasTarget" : {
+          "DNSName": {"Fn::GetAtt" : ["WebsiteCDN", "DomainName"]},
+          "HostedZoneId": "Z2FDTNDATAQYW2"
+        }
+      }
+    },
+
+    "ApiGatewayRESTApi": {
+      "Type": "AWS::ApiGateway::RestApi",
+      "Properties": {
+        "Name": {"Ref" : "AWS::StackName"},
+        "Description": { "Fn::Join" : ["", ["Run hugo to generate website ", 
+                        {"Ref" : "AWS::StackName"} ]]}
+      }
+    },
+
+    "ApiGatewayDeploy": {
+      "Type" : "AWS::ApiGateway::Deployment",
+      "DependsOn": "ApiGatewayLambdaIntegration",
+      "Properties" : {
+        "RestApiId" : { "Ref": "ApiGatewayRESTApi" },
+        "StageName" : "prod"
+      }
+    },
+
+    "ApiGatewayLambdaIntegration": {
+      "Type": "AWS::ApiGateway::Method",
+      "Properties": {
+        "HttpMethod": "POST",
+        "AuthorizationType": "NONE",
+        "Integration": {
+          "Type": "AWS",
+          "IntegrationHttpMethod": "POST",
+          "IntegrationResponses": [{
+            "SelectionPattern": ".*",
+            "StatusCode": "200"
+          }],
+          "Uri": { "Fn::Join" : [ "", [
+                        "arn:aws:apigateway:", 
+                        {"Ref" : "AWS::Region"}, 
+                        ":lambda:path/2015-03-31/functions/",
+                        {"Fn::GetAtt" : ["HugoRunningLambdaFunc", "Arn"] }, 
+                        "/invocations"]]
+                 }
+        },
+        "MethodResponses": [{
+          "StatusCode": "200"
+        }],
+        "ResourceId": { "Fn::GetAtt": ["ApiGatewayRESTApi", "RootResourceId"] },
+        "RestApiId": { "Ref": "ApiGatewayRESTApi" }
+      }
+    },
+
+    "LambdaIAMRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": { "Ref" : "AWS::StackName"},
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                  {
+                      "Effect": "Allow",
+                      "Action": [
+                          "logs:CreateLogGroup",
+                          "logs:CreateLogStream",
+                          "logs:PutLogEvents"
+                      ],
+                      "Resource": "arn:aws:logs:*:*:*"
+                  },
+                  {
+                      "Effect": "Allow",
+                      "Action": [
+                          "s3:*"
+                      ],
+                      "Resource": [
+                        { "Fn::Join" : ["", ["arn:aws:s3:::", {"Ref" : "S3BucketForWebsiteContent"} ]]},
+                        { "Fn::Join" : ["", ["arn:aws:s3:::", {"Ref" : "S3BucketForWebsiteContent"} , "/*"]]}
+                      ]
+                  }
+              ]
+            }
+          }
+        ]
+      }
+    },
+
+    "HugoRunningLambdaFunc": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": { "Ref" : "LambdaS3Bucket" },
+          "S3Key": { "Ref" : "LambdaS3Key" }
+        },
+        "Description": { "Fn::Join" : ["", ["Run hugo to generate website ", 
+                        {"Ref" : "AWS::StackName"}, " and upload to s3 bucket named ",
+                        {"Ref" : "S3BucketForWebsiteContent"} ]]},
+        "Handler": "index.handler",
+        "MemorySize": 704,
+        "Role": {"Fn::GetAtt" : ["LambdaIAMRole", "Arn"] },
+        "Runtime": "nodejs4.3",
+        "Timeout": 30
+      }
+    },
+
+    "LambdaPermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {"Ref": "HugoRunningLambdaFunc"},
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {"Fn::Join": ["", ["arn:aws:execute-api:", {"Ref": "AWS::Region"}, ":", {"Ref": "AWS::AccountId"}, ":", {"Ref": "ApiGatewayRESTApi"}, "/*"]]}
+      }
+    }
+  },
+
+  "Outputs" : {
+    "WebsiteDNS" : {
+      "Value" : {"Fn::Join": ["", ["https://", {"Ref" : "WebsiteDNSName"}]]},
+      "Description" : "The DNS to the CDN"
+    },
+    "WebsiteCDN": {
+      "Value": {"Fn::Join": ["", ["https://", {"Fn::GetAtt" : ["WebsiteCDN", "DomainName"] }]]},
+      "Description": "The URL of the CDN"
+    },
+    "WebhookEndpoint": {
+      "Value": {"Fn::Join": ["", ["https://", {"Ref": "ApiGatewayRESTApi"}, ".execute-api.", {"Ref": "AWS::Region"}, ".amazonaws.com/prod"]]},
+      "Description": "Endpoint to enter in your GitHub project's Settings->Webhooks page"
+    }
+  }
+}
