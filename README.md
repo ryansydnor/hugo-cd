@@ -1,4 +1,4 @@
-# Serverless Hugo
+# Serverless Continuous Delivery and Hosting for Hugo
 
 ![Hugo](https://raw.githubusercontent.com/spf13/hugo/master/docs/static/img/hugo-logo.png)
 
