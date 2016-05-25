@@ -32,6 +32,8 @@ Once the stack is complete, you'll want to create a new WebHook on your GitHub r
 If you're wondering where that configuration above came from and what it should contain, look no further! I personally keep the
 configuration file in the root of my Hugo site directory. Feel free to keep it wherever you want. Now, for the contents...
 
+*Working sample [here](https://github.com/ryansydnor/bb/blob/master/.hugo-cd.yml)*
+
 ```YAML
 # used to drive AWS resource naming. enter all caveats associated with AWS resource naming here.
 # most notably, it must be lowercase alphanumeric.
